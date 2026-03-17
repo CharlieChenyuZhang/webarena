@@ -52,6 +52,17 @@ def construct_llm_config(args: argparse.Namespace) -> LMConfig:
         llm_config.gen_config["max_obs_length"] = args.max_obs_length
         llm_config.gen_config["model_endpoint"] = args.model_endpoint
         llm_config.gen_config["max_retry"] = args.max_retry
+    elif args.provider == "steered":
+        llm_config.gen_config["temperature"] = args.temperature
+        llm_config.gen_config["top_p"] = args.top_p
+        llm_config.gen_config["max_new_tokens"] = args.max_tokens
+        llm_config.gen_config["max_obs_length"] = args.max_obs_length
+        llm_config.gen_config["max_retry"] = args.max_retry
+        # Steering-specific params (set via CLI args added in run.py)
+        llm_config.gen_config["vector_path"] = getattr(args, "vector_path", None)
+        llm_config.gen_config["steering_layer"] = getattr(args, "steering_layer", 20)
+        llm_config.gen_config["steering_coeff"] = getattr(args, "steering_coeff", 0.0)
+        llm_config.gen_config["steering_type"] = getattr(args, "steering_type", "response")
     else:
         raise NotImplementedError(f"provider {args.provider} not implemented")
     return llm_config

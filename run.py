@@ -138,6 +138,33 @@ def config() -> argparse.Namespace:
         default="",
     )
 
+    # steered model config
+    parser.add_argument(
+        "--vector_path",
+        help="Path to .pt persona steering vector file",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--steering_layer",
+        help="Transformer layer to apply steering (1-indexed)",
+        type=int,
+        default=20,
+    )
+    parser.add_argument(
+        "--steering_coeff",
+        help="Steering coefficient (0 = no steering)",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--steering_type",
+        help="Where to apply steering: response, prompt, or all",
+        type=str,
+        choices=["response", "prompt", "all"],
+        default="response",
+    )
+
     # example config
     parser.add_argument("--test_start_idx", type=int, default=0)
     parser.add_argument("--test_end_idx", type=int, default=1000)

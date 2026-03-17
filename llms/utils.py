@@ -5,6 +5,7 @@ from llms import (
     generate_from_huggingface_completion,
     generate_from_openai_chat_completion,
     generate_from_openai_completion,
+    generate_from_steered_model,
     lm_config,
 )
 
@@ -51,6 +52,18 @@ def call_llm(
             top_p=lm_config.gen_config["top_p"],
             stop_sequences=lm_config.gen_config["stop_sequences"],
             max_new_tokens=lm_config.gen_config["max_new_tokens"],
+        )
+    elif lm_config.provider == "steered":
+        response = generate_from_steered_model(
+            prompt=prompt,
+            model_id=lm_config.model,
+            temperature=lm_config.gen_config["temperature"],
+            top_p=lm_config.gen_config["top_p"],
+            max_new_tokens=lm_config.gen_config["max_new_tokens"],
+            vector_path=lm_config.gen_config.get("vector_path"),
+            steering_layer=lm_config.gen_config.get("steering_layer", 20),
+            steering_coeff=lm_config.gen_config.get("steering_coeff", 0.0),
+            steering_type=lm_config.gen_config.get("steering_type", "response"),
         )
     else:
         raise NotImplementedError(
