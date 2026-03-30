@@ -62,6 +62,17 @@ def _iso_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def _write_task_timing(
     result_dir: str,
     *,
@@ -344,6 +355,7 @@ def test(
     scores = []
     max_steps = args.max_steps
     total_tasks = len(config_file_list)
+    run_started_monotonic = time.time()
 
     early_stop_thresholds = {
         "parsing_failure": args.parsing_failure_th,
@@ -538,6 +550,21 @@ def test(
                 steering_layer=args.steering_layer,
                 steering_coeff=args.steering_coeff,
                 steering_type=args.steering_type,
+            )
+            completed_tasks = task_idx
+            remaining_tasks = max(total_tasks - completed_tasks, 0)
+            elapsed_run_seconds = time.time() - run_started_monotonic
+            avg_task_seconds = (
+                elapsed_run_seconds / completed_tasks if completed_tasks else 0.0
+            )
+            eta_seconds = remaining_tasks * avg_task_seconds
+            logger.info(
+                "[Task Timing] "
+                f"task_id={task_id} "
+                f"duration={_format_duration(task_duration_seconds)} "
+                f"elapsed={_format_duration(elapsed_run_seconds)} "
+                f"remaining={remaining_tasks} "
+                f"eta={_format_duration(eta_seconds)}"
             )
             if render_helper is not None:
                 render_helper.close()
