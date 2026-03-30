@@ -6,8 +6,10 @@ import logging
 import os
 import random
 import subprocess
+import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import openai
@@ -54,6 +56,62 @@ logger.addHandler(file_handler)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 console_handler.setFormatter(formatter)
 file_handler.setFormatter(formatter)
+
+
+def _iso_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_task_timing(
+    result_dir: str,
+    *,
+    task_id: int | str | None,
+    task_config_file: str | None,
+    intent: str | None,
+    run_label: str,
+    model_variant: str,
+    condition_name: str,
+    started_at: str,
+    ended_at: str,
+    duration_seconds: float,
+    status: str,
+    score: float | None,
+    provider: str,
+    model: str,
+    model_target: str | None,
+    steering_vector_path: str | None,
+    steering_layer: int | None,
+    steering_coeff: float | None,
+    steering_type: str | None,
+) -> None:
+    if task_id is None:
+        return
+
+    timing_dir = Path(result_dir) / "task_timings"
+    timing_dir.mkdir(parents=True, exist_ok=True)
+    timing_path = timing_dir / f"task_{task_id}.json"
+    payload = {
+        "task_id": task_id,
+        "task_config_file": task_config_file,
+        "intent": intent,
+        "run_label": run_label,
+        "model_variant": model_variant,
+        "condition_name": condition_name,
+        "provider": provider,
+        "model": model,
+        "model_target": model_target,
+        "steering_vector_path": steering_vector_path,
+        "steering_layer": steering_layer,
+        "steering_coeff": steering_coeff,
+        "steering_type": steering_type,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_seconds": duration_seconds,
+        "status": status,
+        "score": score,
+    }
+    with timing_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
 
 
 def config() -> argparse.Namespace:
@@ -137,6 +195,24 @@ def config() -> argparse.Namespace:
         type=str,
         default="",
     )
+    parser.add_argument(
+        "--run_label",
+        help="Human-readable run label stamped into config and model traces",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
+        "--model_variant",
+        help="Traceable model variant label such as baseline or steered",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
+        "--condition_name",
+        help="Experiment condition label such as goal_persistence_high",
+        type=str,
+        default="",
+    )
 
     # steered model config
     parser.add_argument(
@@ -168,6 +244,12 @@ def config() -> argparse.Namespace:
     # example config
     parser.add_argument("--test_start_idx", type=int, default=0)
     parser.add_argument("--test_end_idx", type=int, default=1000)
+    parser.add_argument(
+        "--task_ids_file",
+        type=str,
+        default="",
+        help="Optional JSON file containing a frozen task subset. Each entry may be a task object or task_id.",
+    )
 
     # logging related
     parser.add_argument("--result_dir", type=str, default="")
@@ -181,6 +263,19 @@ def config() -> argparse.Namespace:
         raise ValueError(
             f"Action type {args.action_set_tag} is incompatible with the observation type {args.observation_type}"
         )
+
+    if not args.model_variant:
+        use_local_steering = (
+            args.provider == "steered"
+            or (args.vector_path is not None and args.steering_coeff != 0.0)
+        )
+        args.model_variant = "steered" if use_local_steering else "baseline"
+
+    if not args.condition_name:
+        args.condition_name = args.model_variant
+
+    if not args.run_label:
+        args.run_label = args.condition_name
 
     return args
 
@@ -248,6 +343,7 @@ def test(
 ) -> None:
     scores = []
     max_steps = args.max_steps
+    total_tasks = len(config_file_list)
 
     early_stop_thresholds = {
         "parsing_failure": args.parsing_failure_th,
@@ -267,8 +363,21 @@ def test(
         sleep_after_execution=args.sleep_after_execution,
     )
 
-    for config_file in config_file_list:
+    for task_idx, config_file in enumerate(config_file_list, start=1):
+        task_started_monotonic = time.time()
+        task_started_at = _iso_utc_now()
+        task_id: int | str | None = None
+        intent: str | None = None
+        task_config_file_for_log: str | None = config_file
+        score: float | None = None
+        task_status = "started"
+        render_helper = None
         try:
+            progress_pct = (task_idx / total_tasks) * 100 if total_tasks else 100.0
+            logger.info(
+                f"[Task Progress] {task_idx}/{total_tasks} "
+                f"({progress_pct:.1f}%) run_label={args.run_label}"
+            )
             render_helper = RenderHelper(
                 config_file, args.result_dir, args.action_set_tag
             )
@@ -286,7 +395,7 @@ def test(
                     # subprocess to renew the cookie
                     subprocess.run(
                         [
-                            "python",
+                            sys.executable,
                             "browser_env/auto_login.py",
                             "--auth_folder",
                             temp_dir,
@@ -300,11 +409,25 @@ def test(
                     config_file = f"{temp_dir}/{os.path.basename(config_file)}"
                     with open(config_file, "w") as f:
                         json.dump(_c, f)
+                    task_config_file_for_log = config_file
 
             logger.info(f"[Config file]: {config_file}")
             logger.info(f"[Intent]: {intent}")
 
-            agent.reset(config_file)
+            agent.reset(
+                config_file,
+                result_dir=args.result_dir,
+                run_metadata={
+                    "run_label": args.run_label,
+                    "model_variant": args.model_variant,
+                    "condition_name": args.condition_name,
+                    "model_target": args.model_endpoint or None,
+                    "steering_vector_path": args.vector_path,
+                    "steering_layer": args.steering_layer,
+                    "steering_coeff": args.steering_coeff,
+                    "steering_type": args.steering_type,
+                },
+            )
             trajectory: Trajectory = []
             obs, info = env.reset(options={"config_file": config_file})
             state_info: StateInfo = {"observation": obs, "info": info}
@@ -366,16 +489,22 @@ def test(
 
             if score == 1:
                 logger.info(f"[Result] (PASS) {config_file}")
+                task_status = "pass"
             else:
                 logger.info(f"[Result] (FAIL) {config_file}")
+                task_status = "fail"
 
             if args.save_trace_enabled:
                 env.save_trace(
                     Path(args.result_dir) / "traces" / f"{task_id}.zip"
                 )
 
+        except KeyboardInterrupt:
+            task_status = "interrupted"
+            raise
         except openai.error.OpenAIError as e:
             logger.info(f"[OpenAI Error] {repr(e)}")
+            task_status = "openai_error"
         except Exception as e:
             logger.info(f"[Unhandled Error] {repr(e)}]")
             import traceback
@@ -385,11 +514,39 @@ def test(
                 f.write(f"[Config file]: {config_file}\n")
                 f.write(f"[Unhandled Error] {repr(e)}\n")
                 f.write(traceback.format_exc())  # write stack trace to file
-
-        render_helper.close()
+            task_status = "error"
+        finally:
+            task_ended_at = _iso_utc_now()
+            task_duration_seconds = time.time() - task_started_monotonic
+            _write_task_timing(
+                args.result_dir,
+                task_id=task_id,
+                task_config_file=task_config_file_for_log,
+                intent=intent,
+                run_label=args.run_label,
+                model_variant=args.model_variant,
+                condition_name=args.condition_name,
+                started_at=task_started_at,
+                ended_at=task_ended_at,
+                duration_seconds=task_duration_seconds,
+                status=task_status,
+                score=score,
+                provider=args.provider,
+                model=args.model,
+                model_target=args.model_endpoint or None,
+                steering_vector_path=args.vector_path,
+                steering_layer=args.steering_layer,
+                steering_coeff=args.steering_coeff,
+                steering_type=args.steering_type,
+            )
+            if render_helper is not None:
+                render_helper.close()
 
     env.close()
-    logger.info(f"Average score: {sum(scores) / len(scores)}")
+    if scores:
+        logger.info(f"Average score: {sum(scores) / len(scores)}")
+    else:
+        logger.info("Average score: no completed tasks")
 
 
 def prepare(args: argparse.Namespace) -> None:
@@ -411,6 +568,8 @@ def prepare(args: argparse.Namespace) -> None:
 
     if not (Path(result_dir) / "traces").exists():
         (Path(result_dir) / "traces").mkdir(parents=True)
+    if not (Path(result_dir) / "task_timings").exists():
+        (Path(result_dir) / "task_timings").mkdir(parents=True)
 
     # log the log file
     with open(os.path.join(result_dir, "log_files.txt"), "a+") as f:
@@ -438,16 +597,37 @@ def dump_config(args: argparse.Namespace) -> None:
             logger.info(f"Dump config to {config_file}")
 
 
-if __name__ == "__main__":
-    args = config()
-    args.sleep_after_execution = 2.0
-    prepare(args)
+def resolve_config_file_list(args: argparse.Namespace) -> list[str]:
+    if args.task_ids_file:
+        with open(args.task_ids_file, "r", encoding="utf-8") as f:
+            task_items = json.load(f)
+        task_ids: list[str] = []
+        for item in task_items:
+            if isinstance(item, dict):
+                task_id = item.get("task_id")
+            else:
+                task_id = item
+            if task_id is None:
+                raise ValueError(
+                    f"Task entry in {args.task_ids_file} is missing task_id: {item!r}"
+                )
+            task_ids.append(str(task_id))
+        return [f"config_files/{task_id}.json" for task_id in task_ids]
 
     test_file_list = []
     st_idx = args.test_start_idx
     ed_idx = args.test_end_idx
     for i in range(st_idx, ed_idx):
         test_file_list.append(f"config_files/{i}.json")
+    return test_file_list
+
+
+if __name__ == "__main__":
+    args = config()
+    args.sleep_after_execution = 2.0
+    prepare(args)
+
+    test_file_list = resolve_config_file_list(args)
     if "debug" not in args.result_dir:
         test_file_list = get_unfinished(test_file_list, args.result_dir)
 
