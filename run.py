@@ -343,6 +343,7 @@ def test(
 ) -> None:
     scores = []
     max_steps = args.max_steps
+    total_tasks = len(config_file_list)
 
     early_stop_thresholds = {
         "parsing_failure": args.parsing_failure_th,
@@ -362,7 +363,7 @@ def test(
         sleep_after_execution=args.sleep_after_execution,
     )
 
-    for config_file in config_file_list:
+    for task_idx, config_file in enumerate(config_file_list, start=1):
         task_started_monotonic = time.time()
         task_started_at = _iso_utc_now()
         task_id: int | str | None = None
@@ -372,6 +373,11 @@ def test(
         task_status = "started"
         render_helper = None
         try:
+            progress_pct = (task_idx / total_tasks) * 100 if total_tasks else 100.0
+            logger.info(
+                f"[Task Progress] {task_idx}/{total_tasks} "
+                f"({progress_pct:.1f}%) run_label={args.run_label}"
+            )
             render_helper = RenderHelper(
                 config_file, args.result_dir, args.action_set_tag
             )
