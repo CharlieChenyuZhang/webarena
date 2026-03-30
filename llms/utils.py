@@ -1,13 +1,22 @@
 import argparse
 from typing import Any
 
-from llms import (
-    generate_from_huggingface_completion,
+from llms import lm_config
+from llms.providers.hf_utils import generate_from_huggingface_completion
+from llms.providers.openai_utils import (
     generate_from_openai_chat_completion,
     generate_from_openai_completion,
-    generate_from_steered_model,
-    lm_config,
 )
+
+try:
+    from llms.providers.steered_utils import generate_from_steered_model
+except ModuleNotFoundError as exc:
+    def generate_from_steered_model(*args, **kwargs):  # type: ignore[no-redef]
+        raise ModuleNotFoundError(
+            "Steered inference dependencies are missing in the WebArena venv. "
+            "Install torch/transformers in that environment before using "
+            "--provider steered."
+        ) from exc
 
 APIInput = str | list[Any] | dict[str, Any]
 

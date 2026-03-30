@@ -12,7 +12,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Allow importing from agency_vectors repo
-_AGENCY_VECTORS_ROOT = Path(__file__).resolve().parents[2] / "agency_vectors"
+_AGENCY_VECTORS_ROOT = Path(__file__).resolve().parents[3] / "agency_vectors"
 if _AGENCY_VECTORS_ROOT.is_dir():
     sys.path.insert(0, str(_AGENCY_VECTORS_ROOT))
 
@@ -24,23 +24,35 @@ from activation_steer import ActivationSteerer
 _MODEL_CACHE: dict[str, Any] = {}
 
 
+def _get_device_and_dtype() -> tuple[str, torch.dtype]:
+    if torch.cuda.is_available():
+        return "cuda", torch.bfloat16
+    if torch.backends.mps.is_available():
+        return "mps", torch.float16
+    return "cpu", torch.float32
+
+
 def _get_model_and_tokenizer(model_id: str):
     """Load (or return cached) model and tokenizer."""
     if model_id not in _MODEL_CACHE:
+        device, dtype = _get_device_and_dtype()
         print(f"[steered] Loading model {model_id} …")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokenizer.padding_side = "left"
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-        )
+        load_kwargs: dict[str, Any] = {
+            "torch_dtype": dtype,
+            "low_cpu_mem_usage": True,
+        }
+        if device == "cuda":
+            load_kwargs["device_map"] = "auto"
+        model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
+        if device != "cuda":
+            model = model.to(device)
         model.eval()
-        _MODEL_CACHE[model_id] = (model, tokenizer)
-        print(f"[steered] Model loaded on {model.device}")
+        _MODEL_CACHE[model_id] = (model, tokenizer, device)
+        print(f"[steered] Model loaded on {device}")
 
     return _MODEL_CACHE[model_id]
 
@@ -89,7 +101,7 @@ def generate_from_steered_model(
     Returns:
         The generated text (string).
     """
-    model, tokenizer = _get_model_and_tokenizer(model_id)
+    model, tokenizer, device = _get_model_and_tokenizer(model_id)
 
     # Format input – accept both chat messages and raw strings
     if isinstance(prompt, list):
@@ -101,7 +113,7 @@ def generate_from_steered_model(
         text = prompt
 
     inputs = tokenizer(text, return_tensors="pt")
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    inputs = {k: v.to(device) for k, v in inputs.items()}
     prompt_len = inputs["input_ids"].shape[1]
 
     # Determine whether to steer
