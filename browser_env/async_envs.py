@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,9 +48,18 @@ class AsyncScriptBrowserEnv(Env[npt.NDArray[np.uint8], Action]):
     async def setup(self, config_file: Path | None = None) -> None:
         self.context_manager = async_playwright()
         self.playwright = await self.context_manager.__aenter__()
-        self.browser = await self.playwright.chromium.launch(
-            headless=self.headless, slow_mo=self.slow_mo
-        )
+        launch_kwargs = {
+            "headless": self.headless,
+            "slow_mo": self.slow_mo,
+        }
+        host_resolver_rules = os.environ.get(
+            "WEBARENA_HOST_RESOLVER_RULES", ""
+        ).strip()
+        if host_resolver_rules:
+            launch_kwargs["args"] = [
+                f"--host-resolver-rules={host_resolver_rules}"
+            ]
+        self.browser = await self.playwright.chromium.launch(**launch_kwargs)
         if config_file:
             with open(config_file, "r") as f:
                 instance_config = json.load(f)

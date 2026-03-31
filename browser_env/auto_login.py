@@ -21,6 +21,14 @@ HEADLESS = True
 SLOW_MO = 0
 
 
+def browser_launch_kwargs() -> dict:
+    kwargs = {"headless": HEADLESS}
+    host_resolver_rules = os.environ.get("WEBARENA_HOST_RESOLVER_RULES", "").strip()
+    if host_resolver_rules:
+        kwargs["args"] = [f"--host-resolver-rules={host_resolver_rules}"]
+    return kwargs
+
+
 SITES = ["gitlab", "shopping", "shopping_admin", "reddit"]
 URLS = [
     f"{GITLAB}/-/profile",
@@ -41,7 +49,10 @@ def is_expired(
 
     context_manager = sync_playwright()
     playwright = context_manager.__enter__()
-    browser = playwright.chromium.launch(headless=True, slow_mo=SLOW_MO)
+    kwargs = browser_launch_kwargs()
+    kwargs["headless"] = True
+    kwargs["slow_mo"] = SLOW_MO
+    browser = playwright.chromium.launch(**kwargs)
     context = browser.new_context(storage_state=storage_state)
     page = context.new_page()
     page.goto(url)
@@ -61,7 +72,7 @@ def is_expired(
 def renew_comb(comb: list[str], auth_folder: str = "./.auth") -> None:
     context_manager = sync_playwright()
     playwright = context_manager.__enter__()
-    browser = playwright.chromium.launch(headless=HEADLESS)
+    browser = playwright.chromium.launch(**browser_launch_kwargs())
     context = browser.new_context()
     page = context.new_page()
 

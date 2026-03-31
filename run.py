@@ -404,20 +404,30 @@ def test(
                     cookie_file_name = os.path.basename(_c["storage_state"])
                     comb = get_site_comb_from_filepath(cookie_file_name)
                     temp_dir = tempfile.mkdtemp()
-                    # subprocess to renew the cookie
-                    subprocess.run(
-                        [
-                            sys.executable,
-                            "browser_env/auto_login.py",
-                            "--auth_folder",
-                            temp_dir,
-                            "--site_list",
-                            *comb,
-                        ]
-                    )
+                    skip_cookie_renew = os.environ.get(
+                        "WEBARENA_SKIP_COOKIE_RENEW", "0"
+                    ) == "1"
+                    if skip_cookie_renew:
+                        source_cookie_path = Path(_c["storage_state"])
+                        assert source_cookie_path.exists(), source_cookie_path
+                        target_cookie_path = Path(temp_dir) / cookie_file_name
+                        target_cookie_path.write_text(
+                            source_cookie_path.read_text()
+                        )
+                    else:
+                        subprocess.run(
+                            [
+                                sys.executable,
+                                "browser_env/auto_login.py",
+                                "--auth_folder",
+                                temp_dir,
+                                "--site_list",
+                                *comb,
+                            ],
+                            check=True,
+                        )
                     _c["storage_state"] = f"{temp_dir}/{cookie_file_name}"
                     assert os.path.exists(_c["storage_state"])
-                    # update the config file
                     config_file = f"{temp_dir}/{os.path.basename(config_file)}"
                     with open(config_file, "w") as f:
                         json.dump(_c, f)
